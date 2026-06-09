@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IL_Allegro · Allegro Callback</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         background: #F4F2EE; min-height: 100vh; padding: 2rem; color: #333; }
+  .container { max-width: 520px; margin: 0 auto; }
+  h1 { font-size: 1.4rem; font-weight: 700; color: #BA7517; margin-bottom: 0.25rem; }
+  .subtitle { color: #888; font-size: 0.9rem; margin-bottom: 2rem; }
+  .card { background: #fff; border: 1px solid #e0dcd4; border-radius: 12px;
+          padding: 1.5rem; margin-bottom: 1rem; }
+  .status { padding: 1rem 1.25rem; border-radius: 10px; font-size: 0.9rem;
+            line-height: 1.6; margin-bottom: 1rem; font-weight: 500; }
+  .status.waiting  { background: #fff8ee; border: 1px solid #f0d080; color: #7a5500; }
+  .status.success  { background: #edfaf5; border: 1px solid #0F6E56; color: #0F6E56; }
+  .status.error    { background: #fef0f0; border: 1px solid #A32D2D; color: #A32D2D; }
+  .status.loading  { background: #f0f4ff; border: 1px solid #185FA5; color: #185FA5; }
+  .code-box { background: #f7f5f2; border: 1px solid #d0ccc6; border-radius: 8px;
+              padding: 0.75rem; font-family: monospace; font-size: 0.8rem;
+              word-break: break-all; color: #444; margin: 0.75rem 0; }
+  .shop-badge { display: inline-block; padding: 0.25rem 0.75rem; border-radius: 20px;
+                font-size: 0.8rem; font-weight: 600; margin-bottom: 1rem;
+                background: rgba(186,117,23,0.15); color: #BA7517; }
+  .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid #185FA5;
+             border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite;
+             vertical-align: middle; margin-right: 0.5rem; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  a.back { color: #BA7517; font-size: 0.85rem; text-decoration: none; display: inline-block; margin-top: 1rem; }
+  a.back:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>IL_Allegro · Allegro Callback</h1>
+  <p class="subtitle">Сохранение токена авторизации</p>
+
+  <div class="card" id="main-card">
+    <div id="status" class="status waiting">Обработка...</div>
+    <div id="content"></div>
+  </div>
+
+  <a href="auth.html" class="back">← Вернуться к авторизации</a>
+</div>
+
+<script>
+const REPO  = 'sellerup-biz/il_allegro';
+const NAMES = { IL: 'IL_read' };
+
+async function init() {
+  const params  = new URLSearchParams(window.location.search);
+  const code    = params.get('code');
+  const error   = params.get('error');
+  const shop    = sessionStorage.getItem('pending_shop');
+  const ghToken = sessionStorage.getItem('gh_token');
+
+  const statusEl  = document.getElementById('status');
+  const contentEl = document.getElementById('content');
+
+  if (error) {
+    statusEl.className = 'status error';
+    statusEl.textContent = '❌ Allegro вернул ошибку: ' + error;
+    return;
+  }
+  if (!code) {
+    statusEl.className = 'status error';
+    statusEl.textContent = '❌ Код авторизации не найден в URL.';
+    return;
+  }
+  if (!shop || !ghToken) {
+    statusEl.className = 'status waiting';
+    statusEl.textContent = '⚠️ Сессия не найдена. Вернись на страницу авторизации и начни заново.';
+    contentEl.innerHTML = '<div class="code-box">' + code + '</div>' +
+      '<p style="font-size:0.82rem;color:#888">Можно вписать этот код вручную через workflow «Allegro Auth» во вкладке Actions.</p>';
+    return;
+  }
+
+  sessionStorage.removeItem('pending_shop');
+  const shopName = NAMES[shop] || shop;
+  contentEl.innerHTML = '<span class="shop-badge">' + shopName + '</span>';
+
+  const headers = {
+    'Authorization': 'token ' + ghToken,
+    'Accept': 'application/vnd.github+json',
+    'Content-Type': 'application/json'
+  };
+
+  statusEl.className = 'status loading';
+  statusEl.innerHTML = '<span class="spinner"></span> Запускаем сохранение токена для <b>' + shopName + '</b>...';
+
+  try {
+    const dispatchedAt = Date.now();
+    const resp = await fetch(
+      'https://api.github.com/repos/' + REPO + '/actions/workflows/auth.yml/dispatches',
+      { method: 'POST', headers, body: JSON.stringify({ ref: 'main', inputs: { shop: shop, code: code } }) }
+    );
+
+    if (resp.status !== 204) {
+      const txt = await resp.text();
+      statusEl.className = 'status error';
+      statusEl.innerHTML = '❌ Ошибка GitHub API (HTTP ' + resp.status + '):<br><small>' + txt.slice(0, 220) + '</small>';
+      return;
+    }
+
+    statusEl.innerHTML = '<span class="spinner"></span> Workflow запущен, обмениваем код на токен...';
+    const conclusion = await waitForRun(headers, dispatchedAt);
+
+    if (conclusion === 'success') {
+      statusEl.className = 'status success';
+      statusEl.innerHTML = '✅ Refresh token для <b>' + shopName + '</b> сохранён в GitHub Secrets!';
+      contentEl.innerHTML += '<p style="margin-top:1rem;font-size:0.85rem;color:#555">Готово — окно можно закрыть.</p>';
+    } else if (conclusion === null) {
+      statusEl.className = 'status loading';
+      statusEl.innerHTML = '⏳ Workflow ещё выполняется. Проверь вкладку Actions репозитория через минуту.';
+    } else {
+      statusEl.className = 'status error';
+      statusEl.innerHTML = '❌ Workflow завершился со статусом: <b>' + conclusion + '</b>. Открой вкладку Actions для деталей.';
+    }
+  } catch (e) {
+    statusEl.className = 'status error';
+    statusEl.textContent = '❌ Ошибка: ' + e.message;
+  }
+}
+
+// Находит запуск auth.yml, созданный после dispatch, и ждёт его завершения.
+async function waitForRun(headers, sinceMs) {
+  for (let i = 0; i < 30; i++) {
+    await new Promise(r => setTimeout(r, i === 0 ? 3500 : 4000));
+    try {
+      const r = await fetch(
+        'https://api.github.com/repos/' + REPO + '/actions/workflows/auth.yml/runs?per_page=5',
+        { headers }
+      );
+      const j = await r.json();
+      const run = (j.workflow_runs || []).find(
+        run => new Date(run.created_at).getTime() >= sinceMs - 15000
+      );
+      if (run && run.status === 'completed') return run.conclusion; // 'success' | 'failure' | ...
+    } catch (_) { /* keep polling */ }
+  }
+  return null; // timed out
+}
+
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,39 @@
+name: Allegro Auth — получить токен
+
+on:
+  workflow_dispatch:
+    inputs:
+      shop:
+        description: 'Магазин'
+        required: true
+        default: IL
+        type: choice
+        options:
+          - IL
+      code:
+        description: 'Authorization code от Allegro'
+        required: true
+        type: string
+
+jobs:
+  auth:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests PyNaCl
+
+      - name: Exchange code and save refresh_token
+        run: python auth_exchange.py
+        env:
+          SHOP:             ${{ github.event.inputs.shop }}
+          CODE:             ${{ github.event.inputs.code }}
+          GH_TOKEN:         ${{ secrets.GH_TOKEN }}
+          GH_REPO:          ${{ github.repository }}
+          CLIENT_ID_IL:     ${{ secrets.CLIENT_ID_IL }}
+          CLIENT_SECRET_IL: ${{ secrets.CLIENT_SECRET_IL }}
